@@ -34,6 +34,10 @@ struct Controller::impl {
 
   void Start(hci::HciLayer* hci) {
     hci_ = hci;
+
+    /* FIXME: yupaik/shimas BLE bug workaround*/
+    leSupported = true;
+
     Handler* handler = module_.GetHandler();
     hci_->RegisterEventHandler(
         EventCode::NUMBER_OF_COMPLETED_PACKETS, handler->BindOn(this, &Controller::impl::NumberOfCompletedPackets));
@@ -313,7 +317,12 @@ struct Controller::impl {
 
   void le_read_buffer_size_v2_handler(CommandCompleteView view) {
     auto complete_view = LeReadBufferSizeV2CompleteView::Create(view);
-    ASSERT(complete_view.IsValid());
+    /* FIXME: yupaik/shimas BLE bug workaround*/
+    ASSERT_LOG(complete_view.IsValid(), "le_read_buffer_size_v2_handler failed; BLE disabled");
+    if(!complete_view.IsValid()){
+      leSupported = false;
+      return;
+    }
     ErrorCode status = complete_view.GetStatus();
     ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
     le_buffer_size_ = complete_view.GetLeBufferSize();
@@ -330,7 +339,12 @@ struct Controller::impl {
 
   void le_set_host_feature_handler(CommandCompleteView view) {
     auto complete_view = LeSetHostFeatureCompleteView::Create(view);
-    ASSERT(complete_view.IsValid());
+    /* FIXME: yupaik/shimas BLE bug workaround*/
+    ASSERT_LOG(complete_view.IsValid(), "le_set_host_feature_handler; BLE disabled");
+    if(!complete_view.IsValid()){
+      leSupported = false;
+      return;
+    }
     ErrorCode status = complete_view.GetStatus();
     ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
   }
@@ -549,6 +563,20 @@ struct Controller::impl {
     auto status_view = T::Create(view);
     ASSERT(status_view.IsValid());
     ASSERT(status_view.GetStatus() == ErrorCode::SUCCESS);
+  }
+
+/* FIXME: yupaik/shimas BLE bug workaround*/
+#define OP_CODE_MAPPING_BLE(name)                                                  \
+  case OpCode::name: {                                                         \
+    uint16_t index = (uint16_t)OpCodeIndex::name;                              \
+    uint16_t byte_index = index / 10;                                          \
+    uint16_t bit_index = index % 10;                                           \
+    bool supported = local_supported_commands_[byte_index] & (1 << bit_index); \
+    supported &= leSupported;
+    if (!supported) {                                                          \
+      LOG_DEBUG("unsupported command opcode: 0x%04x", (uint16_t)OpCode::name); \
+    }                                                                          \
+    return supported;                                                          \
   }
 
 #define OP_CODE_MAPPING(name)                                                  \
@@ -787,7 +815,6 @@ struct Controller::impl {
       OP_CODE_MAPPING(LE_SET_DEFAULT_PERIODIC_ADVERTISING_SYNC_TRANSFER_PARAMETERS)
       OP_CODE_MAPPING(LE_GENERATE_DHKEY_COMMAND)
       OP_CODE_MAPPING(LE_MODIFY_SLEEP_CLOCK_ACCURACY)
-//      OP_CODE_MAPPING(LE_READ_BUFFER_SIZE_V2)
       OP_CODE_MAPPING(LE_READ_ISO_TX_SYNC)
       OP_CODE_MAPPING(LE_SET_CIG_PARAMETERS)
       OP_CODE_MAPPING(LE_SET_CIG_PARAMETERS_TEST)
@@ -802,7 +829,6 @@ struct Controller::impl {
       OP_CODE_MAPPING(LE_REQUEST_PEER_SCA)
       OP_CODE_MAPPING(LE_SETUP_ISO_DATA_PATH)
       OP_CODE_MAPPING(LE_REMOVE_ISO_DATA_PATH)
-//      OP_CODE_MAPPING(LE_SET_HOST_FEATURE)
       OP_CODE_MAPPING(LE_READ_ISO_LINK_QUALITY)
       OP_CODE_MAPPING(LE_ENHANCED_READ_TRANSMIT_POWER_LEVEL)
       OP_CODE_MAPPING(LE_READ_REMOTE_TRANSMIT_POWER_LEVEL)
@@ -816,12 +842,9 @@ struct Controller::impl {
       OP_CODE_MAPPING(CONFIGURE_DATA_PATH)
       OP_CODE_MAPPING(ENHANCED_FLUSH)
 
-      case OpCode::LE_READ_BUFFER_SIZE_V2:
-        LOG_DEBUG("unsupported command opcode: 0x%04x", (uint16_t)OpCode::LE_READ_BUFFER_SIZE_V2);
-        return false;
-      case OpCode::LE_SET_HOST_FEATURE:
-        LOG_DEBUG("unsupported command opcode: 0x%04x", (uint16_t)OpCode::LE_SET_HOST_FEATURE);
-        return false;
+      /* FIXME: yupaik/shimas BLE bug workaround*/
+      OP_CODE_MAPPING_BLE(LE_READ_BUFFER_SIZE_V2)
+      OP_CODE_MAPPING_BLE(LE_SET_HOST_FEATURE)
 
       // deprecated
       case OpCode::ADD_SCO_CONNECTION:
@@ -883,6 +906,10 @@ struct Controller::impl {
   uint8_t le_number_supported_advertising_sets_;
   uint8_t le_periodic_advertiser_list_size_;
   VendorCapabilities vendor_capabilities_;
+
+
+  /* FIXME: yupaik/shimas BLE bug workaround*/
+  bool leSupported;
 };  // namespace hci
 
 Controller::Controller() : impl_(std::make_unique<impl>(*this)) {}
